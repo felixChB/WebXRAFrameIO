@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <link rel="stylesheet" href="/src/style.css">
+
+    <!-- <script src="/socket.io/socket.io.js"></script> -->
+    <!-- <script src="https://cdn.babylonjs.com/babylon.js"></script> -->
+    <script language="JavaScript" type="module" src="./dist/bundle.js" defer></script>
+</head>
+
+<body>
+    <!-- <div id="fps">0</div> -->
+    <!-- <div id="playerID">-</div> -->
+    <div id="loadingScreen">
+        <span id="loader-bubble">
+            <span id="loader-bubble-blur"></span>
+        </span>
+        <span id="loading-header">loading VR-Application</span>
+    </div>
+    <div id="startScreen">
+        <div id="start-screen-wrapper">
+            <div id="header-wrapper">
+                <h1>MULTIPLAYER VR-PONG</h1>
+                <h2>select a player position...</h2>
+            </div>
+            <div id="btn-wrapper">
+                <button id="startPos-1" class="btn posSelection">
+                    Position 1
+                    <span id="btn-arrow-1"></span>
+                </button>
+                <button id="startPos-4" class="btn posSelection">
+                    Position 4
+                    <span id="btn-arrow-4"></span>
+                </button>
+                <button id="startPos-3" class="btn posSelection">
+                    Position 3
+                    <span id="btn-arrow-3"></span>
+                </button>
+                <button id="startPos-2" class="btn posSelection">
+                    Position 2
+                    <span id="btn-arrow-2"></span>
+                </button>
+                <button id="continueAsPreviousPlayer" class="btn">
+                    <span id="btn-arrow-pre"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+    <canvas id="renderCanvas"></canvas>
+</body>
+
+</html>
