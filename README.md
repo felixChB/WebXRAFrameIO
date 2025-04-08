@@ -3,7 +3,7 @@
 # About
 
 This project is about the development of a cooperative multiplayer VR-Game using webXR.
-The server runs with Socket.IO and the 3D-Representation is done in Babylonjs.
+The server runs with Socket.IO and the 3D-Representation is done in A-Frame.
 
 # Installation
 
@@ -17,7 +17,7 @@ Node.js is requiered to run the server and git Bash ist used to create the ssl c
 Clone the git repository
 
 ```bash
-git clone https://github.com/felixChB/WebXRBabylonIO.git
+git clone https://github.com/felixChB/WebXRAFrameIO.git
 ```
 ### Create ssl certificates and keys for https
 

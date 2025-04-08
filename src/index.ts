@@ -1,5 +1,6 @@
 import { io } from 'socket.io-client';
 import * as AFRAME from 'aframe';
+import * as THREE from 'three';
 
 const socket = io();
 
@@ -13,6 +14,10 @@ const clientRefreshRate = 10; // time between client updates in ms
 let clientID: string;
 let clientPlayer: Player | null = null;
 let playerUsingXR: boolean = false;
+let leftController: THREE.XRTargetRaySpace | undefined = undefined;
+let rightController: THREE.XRTargetRaySpace | undefined = undefined;
+let leftControllerMesh: AFRAME.Entity | null = null;
+let rightControllerMesh: AFRAME.Entity | null = null;
 // let clientStartPos: { x: number, y: number, z: number };
 
 let playerList: { [key: string]: Player } = {};
@@ -22,17 +27,14 @@ getLocalStorage();
 let sceneStartInfos: SceneStartInfos;
 let playerStartInfos: { [key: number]: PlayerStartInfo };
 
-let xr: WebXRDefaultExperience;
-let xrCamera: FreeCamera | null = null;
-let leftController: WebXRInputSource | null = null;
-let rightController: WebXRInputSource | null = null;
-
 // store the textBlock GUI elements for updating the scores
+/*
 const guiTextElements: { [key: string]: GUI.TextBlock } = {};
 const guiRectElements: { [key: string]: GUI.Rectangle } = {};
+*/
 
-let exitGameAreaInterval: NodeJS.Timer | null = null;
-let enteredGameAreaInterval: NodeJS.Timer | null = null;
+let exitGameAreaInterval: NodeJS.Timeout | null = null;
+let enteredGameAreaInterval: NodeJS.Timeout | null = null;
 
 // Get HTML Elements
 // const divFps = document.getElementById('fps');
@@ -45,7 +47,6 @@ for (let i = 1; i <= 4; i++) {
     let startbutton = document.getElementById(`startPos-${i}`);
     startButtons[i] = startbutton as HTMLButtonElement;
 }
-const canvas = document.getElementById('renderCanvas') as HTMLCanvasElement;
 
 // Test Variables
 let serverUpdateCounter = 0;
@@ -61,8 +62,15 @@ const fpsArray: { suc: number; time: number }[] = [];
 ////////////////////////////// CREATE BABYLON SCENE ETC. //////////////////////////////
 
 // Basic Setup ---------------------------------------------------------------------------------
-const engine = new Engine(canvas, true);
-const scene = new Scene(engine);
+const scene = document.querySelector('a-scene');
+// const xr = scene?.renderer.xr;
+const sceneThree = scene?.object3D as THREE.Scene;
+
+let camera = document.getElementById('camera') as AFRAME.Entity;
+console.log('Camera: ', camera);
+camera.setAttribute('position', '0 5 0');
+camera.object3D.position.set(0, 5, 0);
+camera.object3D.rotation.set(Math.PI / 2, Math.PI, Math.PI / 4);
 
 // let ssr: SSRRenderingPipeline;
 
@@ -79,131 +87,72 @@ function createBasicScene(sceneStartInfos: SceneStartInfos, playerStartInfos: { 
     // let playerPaddleSize = sceneStartInfos.playerPaddleSize;
 
     // Camera --------------------------------------------------------------------------------------
-    // Add a camera for the non-VR view in browser
-    // var camera = new ArcRotateCamera('Camera', -(Math.PI / 4) * 3, Math.PI / 4, 6, new Vector3(0, 0, 0), scene);
-    // camera.attachControl(true); //debug
 
-    const camera = new FreeCamera('Camera', new Vector3(0, 5, 0), scene);
-    camera.rotation = new Vector3(Math.PI / 2, Math.PI, Math.PI / 4);
-    //camera.detachControl();
-    camera.attachControl(true);
-
-    scene.activeCamera = camera;
 
     // Lights --------------------------------------------------------------------------------------
-    // Creates a light, aiming 0,1,0 - to the sky
-    var hemiLight = new HemisphericLight('hemiLight', new Vector3(0, 1, 0), scene);
-    hemiLight.intensity = 0.1;
-
-    var dirLight = new DirectionalLight("DirectionalLight", new Vector3(-0.7, -0.5, 0.4), scene);
-    dirLight.position = new Vector3(9, 11, -17);
-    dirLight.intensity = 0.2;
-    dirLight.shadowMaxZ = 130;
-    dirLight.shadowMinZ = 10;
-
-    const ballLight = new PointLight('ballLight', new Vector3(ballStartPos.x, ballStartPos.y, ballStartPos.z), scene);
-    ballLight.diffuse = Color3.FromHexString('#1f53ff');
-    ballLight.intensity = 2;
-    ballLight.radius = ballSize;
-
-    // add a Glowlayer to let emissive materials glow
-    var gl = new GlowLayer("glow", scene, {
-        mainTextureFixedSize: 1024,
-        blurKernelSize: 64,
-    });
-    gl.intensity = 0.5;
-
-
-    // var hdrTexture = new CubeTexture('./assets/abstract_blue.env', scene);
-    // scene.createDefaultSkybox(hdrTexture, true, 10000);
 
     // Meshes --------------------------------------------------------------------------------------
 
     let edgeWidth = 0.3;
 
-    var ballSphere = MeshBuilder.CreateSphere('ballSphere', { diameter: 2, segments: 32 }, scene);
-    ballSphere.position = new Vector3(ballStartPos.x, ballStartPos.y, ballStartPos.z);
-    ballSphere.scaling = new Vector3(ballSize, ballSize, ballSize);
+    const ballSphere = document.getElementById('ball') as AFRAME.Entity;
+    ballSphere.object3D.position.set(ballStartPos.x, ballStartPos.y, ballStartPos.z);
+    ballSphere.object3D.scale.set(ballSize, ballSize, ballSize);
+    ballSphere.setAttribute('material', 'color', ballColor);
 
-    // Built-in 'ground' shape.
-    var ground = MeshBuilder.CreateGround('ground', { width: 60, height: 60 }, scene);
-
-    var playBox = MeshBuilder.CreateBox('playBox', { size: 1 }, scene);
-    playBox.position = new Vector3(0, midPointOfPlayCube, 0);
-    playBox.scaling = new Vector3(playCubeSize.x, calculatedCubeHeight, playCubeSize.z);
-    playBox.enableEdgesRendering();
-    playBox.edgesWidth = edgeWidth;
-    playBox.edgesColor = new Color4(1, 1, 1, 1);
-
-    // var testBox = MeshBuilder.CreateBox('testBox', { size: 1 }, scene);
-    // testBox.position = new Vector3(0, (playCubeSize.y / 2), 0);
-    // testBox.scaling = new Vector3(playCubeSize.x, playCubeSize.y, playCubeSize.z);
-    // testBox.enableEdgesRendering();
-    // testBox.edgesWidth = edgeWidth;
-    // testBox.edgesColor = new Color4(1, 0, 1, 1);
-
-    // playBox.isVisible = false;
+    const playBox = document.getElementById('playBox') as AFRAME.Entity;
+    playBox.object3D.position.set(0, playCubeElevation, 0);
+    playBox.object3D.scale.set(playCubeSize.x, playCubeSize.y, playCubeSize.z);
 
     // Grounds for the Player Start Positions
-    var player1Ground = MeshBuilder.CreateBox('player1Ground', { size: 1 }, scene);
-    // player1Ground.position = new Vector3((playCubeSize.x / 2 + playerAreaDepth / 2) + 0, -25, 0);
-    player1Ground.position = new Vector3(playerStartInfos[1].position.x, -25, 0);
-    player1Ground.scaling = new Vector3(playerAreaDepth, 50, playCubeSize.z);
-    player1Ground.enableEdgesRendering();
-    player1Ground.edgesWidth = edgeWidth;
-    player1Ground.edgesColor = Color4.FromHexString(playerStartInfos[1].color);
+    const player1Ground = document.getElementById('player1Ground') as AFRAME.Entity;
+    player1Ground.object3D.position.set(playerStartInfos[1].position.x, -25, 0);
+    player1Ground.object3D.scale.set(playerAreaDepth, 50, playCubeSize.z);
+    player1Ground.setAttribute('material', 'color', playerStartInfos[1].color);
 
-    var player2Ground = MeshBuilder.CreateBox('player2Ground', { size: 1 }, scene);
-    // player2Ground.position = new Vector3(-(playCubeSize.x / 2 + playerAreaDepth / 2), -25, 0);
-    player2Ground.position = new Vector3(playerStartInfos[2].position.x, -25, 0);
-    player2Ground.scaling = new Vector3(playerAreaDepth, 50, playCubeSize.z);
-    player2Ground.enableEdgesRendering();
-    player2Ground.edgesWidth = edgeWidth;
-    player2Ground.edgesColor = Color4.FromHexString(playerStartInfos[2].color);
+    const player2Ground = document.getElementById('player2Ground') as AFRAME.Entity;
+    player2Ground.object3D.position.set(playerStartInfos[2].position.x, -25, 0);
+    player2Ground.object3D.scale.set(playerAreaDepth, 50, playCubeSize.z);
+    player2Ground.setAttribute('material', 'color', playerStartInfos[2].color);
 
-    var player3Ground = MeshBuilder.CreateBox('player3Ground', { size: 1 }, scene);
-    // player3Ground.position = new Vector3(0, -25, (playCubeSize.z / 2 + playerAreaDepth / 2));
-    player3Ground.position = new Vector3(0, -25, playerStartInfos[3].position.z);
-    player3Ground.scaling = new Vector3(playCubeSize.x, 50, playerAreaDepth);
-    player3Ground.enableEdgesRendering();
-    player3Ground.edgesWidth = edgeWidth;
-    player3Ground.edgesColor = Color4.FromHexString(playerStartInfos[3].color);
+    const player3Ground = document.getElementById('player3Ground') as AFRAME.Entity;
+    player3Ground.object3D.position.set(0, -25, playerStartInfos[3].position.z);
+    player3Ground.object3D.scale.set(playCubeSize.x, 50, playerAreaDepth);
+    player3Ground.setAttribute('material', 'color', playerStartInfos[3].color);
 
-    var player4Ground = MeshBuilder.CreateBox('player4Ground', { size: 1 }, scene);
-    // player4Ground.position = new Vector3(0, -25, -(playCubeSize.z / 2 + playerAreaDepth / 2));
-    player4Ground.position = new Vector3(0, -25, playerStartInfos[4].position.z);
-    player4Ground.scaling = new Vector3(playCubeSize.x, 50, playerAreaDepth);
-    player4Ground.enableEdgesRendering();
-    player4Ground.edgesWidth = edgeWidth;
-    player4Ground.edgesColor = Color4.FromHexString(playerStartInfos[4].color);
+    const player4Ground = document.getElementById('player4Ground') as AFRAME.Entity;
+    player4Ground.object3D.position.set(0, -25, playerStartInfos[4].position.z);
+    player4Ground.object3D.scale.set(playCubeSize.x, 50, playerAreaDepth);
+    player4Ground.setAttribute('material', 'color', playerStartInfos[4].color);
 
-    var player1Wall = MeshBuilder.CreateBox('player1Wall', { size: 1 }, scene);
-    player1Wall.position = new Vector3(playCubeSize.x / 2 + 0, midPointOfPlayCube, 0);
-    player1Wall.scaling = new Vector3(0.01, calculatedCubeHeight, playCubeSize.z);
+    const player1Wall = document.getElementById('player1Wall') as AFRAME.Entity;
+    player1Wall.object3D.position.set(playerStartInfos[1].position.x, midPointOfPlayCube, 0);
+    player1Wall.object3D.scale.set(edgeWidth, calculatedCubeHeight, playCubeSize.z);
 
-    var player2Wall = MeshBuilder.CreateBox('player2Wall', { size: 1 }, scene);
-    player2Wall.position = new Vector3(-playCubeSize.x / 2 - 0, midPointOfPlayCube, 0);
-    player2Wall.scaling = new Vector3(0.01, calculatedCubeHeight, playCubeSize.z);
+    const player2Wall = document.getElementById('player2Wall') as AFRAME.Entity;
+    player2Wall.object3D.position.set(-playerStartInfos[2].position.x, midPointOfPlayCube, 0);
+    player2Wall.object3D.scale.set(edgeWidth, calculatedCubeHeight, playCubeSize.z);
 
-    var player3Wall = MeshBuilder.CreateBox('player3Wall', { size: 1 }, scene);
-    player3Wall.position = new Vector3(0, midPointOfPlayCube, playCubeSize.z / 2 + 0);
-    player3Wall.scaling = new Vector3(playCubeSize.x, calculatedCubeHeight, 0.01);
+    const player3Wall = document.getElementById('player3Wall') as AFRAME.Entity;
+    player3Wall.object3D.position.set(0, midPointOfPlayCube, playerStartInfos[3].position.z);
+    player3Wall.object3D.scale.set(playCubeSize.x, calculatedCubeHeight, edgeWidth);
 
-    var player4Wall = MeshBuilder.CreateBox('player4Wall', { size: 1 }, scene);
-    player4Wall.position = new Vector3(0, midPointOfPlayCube, -playCubeSize.z / 2 - 0);
-    player4Wall.scaling = new Vector3(playCubeSize.x, calculatedCubeHeight, 0.01);
+    const player4Wall = document.getElementById('player4Wall') as AFRAME.Entity;
+    player4Wall.object3D.position.set(0, midPointOfPlayCube, -playerStartInfos[4].position.z);
+    player4Wall.object3D.scale.set(playCubeSize.x, calculatedCubeHeight, edgeWidth);
 
     // create walls for the top and the bottom of the playcube
-    var topWall = MeshBuilder.CreateBox('player5Wall', { size: 1 }, scene);
-    topWall.position = new Vector3(0, playCubeSize.y, 0);
-    topWall.scaling = new Vector3(playCubeSize.x, 0.01, playCubeSize.z);
+    const topWall = document.getElementById('player5Wall') as AFRAME.Entity;
+    topWall.object3D.position.set(0, playCubeSize.y, 0);
+    topWall.object3D.scale.set(playCubeSize.x, 0.01, playCubeSize.z);
 
-    var bottomWall = MeshBuilder.CreateBox('player6Wall', { size: 1 }, scene);
-    bottomWall.position = new Vector3(0, playCubeElevation, 0);
-    bottomWall.scaling = new Vector3(playCubeSize.x, 0.01, playCubeSize.z);
+    const bottomWall = document.getElementById('player6Wall') as AFRAME.Entity;
+    bottomWall.object3D.position.set(0, playCubeElevation, 0);
+    bottomWall.object3D.scale.set(playCubeSize.x, 0.01, playCubeSize.z);
 
     // GUI --------------------------------------------------------------------------------------
 
+    /*
     let areaExitGUI = GUI.AdvancedDynamicTexture.CreateFullscreenUI("areaExitGUI");
     let areaExitRect = new GUI.Rectangle();
     areaExitRect.width = "60%";
@@ -247,134 +196,7 @@ function createBasicScene(sceneStartInfos: SceneStartInfos, playerStartInfos: { 
     areaEnteredText.fontSize = 20;
     areaEnteredRect.addControl(areaEnteredText);
     guiTextElements['areaEnteredText'] = areaEnteredText;
-
-    // Materials --------------------------------------------------------------------------------------
-
-    var wireframeTexture = new Texture('./assets/figma_grid_wireframe_white.png', scene);
-    wireframeTexture.uScale = 1;
-    wireframeTexture.vScale = 1;
-    wireframeTexture.hasAlpha = true;
-    // const simpleGridTexture = new Texture('./assets/figma_grid_wireframe_blue.png', scene);
-
-    var wireframeMat = new StandardMaterial('wireframeMat', scene);
-    wireframeMat.roughness = 1;
-    wireframeMat.diffuseTexture = wireframeTexture;
-    wireframeMat.diffuseTexture.hasAlpha = true;
-    wireframeMat.emissiveTexture = wireframeTexture;
-    wireframeMat.emissiveTexture.hasAlpha = true;
-    wireframeMat.useAlphaFromDiffuseTexture = true;
-    wireframeMat.backFaceCulling = false;
-    wireframeMat.emissiveColor = Color3.Red();
-    wireframeMat.diffuseColor = Color3.FromHexString('#ffffff');
-    wireframeMat.alpha = 0.5;
-
-    var playBoxMat = new StandardMaterial('playBoxMat', scene);
-    playBoxMat.diffuseColor = Color3.FromHexString('#ffffff');
-    playBoxMat.alpha = 0.1;
-    playBoxMat.specularColor = new Color3(0, 0, 0);
-
-    //testBox.material = wireframeMat;
-
-    var ballMaterial = new PBRMaterial('ballMaterial', scene);
-    ballMaterial.emissiveColor = Color3.FromHexString(ballColor);
-    ballMaterial.metallic = 0.0;
-    ballMaterial.emissiveIntensity = 10;
-
-    var playerStartMat = new PBRMaterial('playerStartMat', scene);
-    playerStartMat.albedoColor = Color3.FromHexString('#141414');
-    playerStartMat.metallic = 1.0;
-    playerStartMat.roughness = 0.0;
-
-    var playerWallMat = new PBRMaterial('playerWallMat', scene);
-    playerWallMat.albedoColor = Color3.FromHexString('#000000');
-    playerWallMat.alpha = 0.7;
-    playerWallMat.metallic = 0.2;
-    playerWallMat.roughness = 0.5;
-    playerWallMat.backFaceCulling = false;
-
-    var wallBounceMat = new PBRMaterial('wallBounceMat', scene);
-    wallBounceMat.albedoColor = Color3.FromHexString('#575757');
-    //wallBounceMat.emissiveColor = Color3.FromHexString('#ffffff');
-    wallBounceMat.alpha = 0.7;
-    wallBounceMat.metallic = 0.2;
-    wallBounceMat.roughness = 0.5;
-    wallBounceMat.backFaceCulling = false;
-
-    // creating the player 0 Material if the player has no position yet
-    var player0Mat = new PBRMaterial(`player0_mat`, scene);
-    player0Mat.emissiveColor = Color3.FromHexString('#ff526f');
-    player0Mat.alpha = 0.2;
-    player0Mat.disableLighting = true;
-    player0Mat.backFaceCulling = false;
-
-    // creating the Materials for the players
-    var player1Mat = new PBRMaterial(`player1_mat`, scene);
-    player1Mat.emissiveColor = Color3.FromHexString(playerStartInfos[1].color);
-    player1Mat.alpha = 0.2;
-    player1Mat.disableLighting = true;
-    player1Mat.backFaceCulling = false;
-    var player1PaddleMat = new PBRMaterial(`player1_paddle_mat`, scene);
-    player1PaddleMat.emissiveColor = Color3.FromHexString(playerStartInfos[1].color);
-    player1PaddleMat.alpha = 0.2;
-    player1PaddleMat.disableLighting = true;
-    player1PaddleMat.backFaceCulling = false;
-
-    var player2Mat = new PBRMaterial(`player2_mat`, scene);
-    player2Mat.emissiveColor = Color3.FromHexString(playerStartInfos[2].color);
-    player2Mat.alpha = 0.2;
-    player2Mat.disableLighting = true;
-    player2Mat.backFaceCulling = false;
-    var player2PaddleMat = new PBRMaterial(`player2_paddle_mat`, scene);
-    player2PaddleMat.emissiveColor = Color3.FromHexString(playerStartInfos[2].color);
-    player2PaddleMat.alpha = 0.2;
-    player2PaddleMat.disableLighting = true;
-    player2PaddleMat.backFaceCulling = false;
-
-    var player3Mat = new PBRMaterial(`player3_mat`, scene);
-    player3Mat.emissiveColor = Color3.FromHexString(playerStartInfos[3].color);
-    player3Mat.alpha = 0.2;
-    player3Mat.disableLighting = true;
-    player3Mat.backFaceCulling = false;
-    var player3PaddleMat = new PBRMaterial(`player3_paddle_mat`, scene);
-    player3PaddleMat.emissiveColor = Color3.FromHexString(playerStartInfos[3].color);
-    player3PaddleMat.alpha = 0.2;
-    player3PaddleMat.disableLighting = true;
-    player3PaddleMat.backFaceCulling = false;
-
-    var player4Mat = new PBRMaterial(`player4_mat`, scene);
-    player4Mat.emissiveColor = Color3.FromHexString(playerStartInfos[4].color);
-    player4Mat.alpha = 0.2;
-    player4Mat.disableLighting = true;
-    player4Mat.backFaceCulling = false;
-    var player4PaddleMat = new PBRMaterial(`player4_paddle_mat`, scene);
-    player4PaddleMat.emissiveColor = Color3.FromHexString(playerStartInfos[4].color);
-    player4PaddleMat.alpha = 0.2;
-    player4PaddleMat.disableLighting = true;
-    player4PaddleMat.backFaceCulling = false;
-
-    // Setting Materials
-    ground.material = wireframeMat;
-    ballSphere.material = ballMaterial;
-
-    playBox.material = playBoxMat;
-
-    for (let i = 1; i <= 4; i++) {
-        let playerGround = scene.getMeshByName(`player${i}Ground`) as Mesh;
-        let playerWall = scene.getMeshByName(`player${i}Wall`) as Mesh;
-        if (playerGround) {
-            playerGround.material = playerStartMat;
-            // playerGround.material = wireframeMat;
-        }
-        if (playerWall) {
-            playerWall.material = playerWallMat;
-            // playerWall.material = wireframeMat;
-        }
-    }
-
-    topWall.material = playerWallMat;
-    bottomWall.material = playerWallMat;
-
-    ground.isVisible = false;
+    */
 }
 
 ////////////////////////////// END CREATE BABYLON SCENE ETC. //////////////////////////////
@@ -456,14 +278,14 @@ class Player implements PlayerData {
     contrPosL: { x: number, y: number, z: number };
     contrRotR: { x: number, y: number, z: number };
     contrRotL: { x: number, y: number, z: number };
-    headObj?: Mesh | null;
-    controllerR?: Mesh | null;
-    controllerL?: Mesh | null;
-    paddle?: Mesh | null;
-    scoreMesh?: Mesh | null;
-    paddleLight?: PointLight | null;
+    headObj?: AFRAME.Entity | null;
+    controllerR?: AFRAME.Entity | null;
+    controllerL?: AFRAME.Entity | null;
+    paddle?: AFRAME.Entity | null;
+    scoreMesh?: AFRAME.Entity | null;
+    paddleLight?: AFRAME.Entity | null;
 
-    constructor(player: PlayerData, headObj?: Mesh, controllerR?: Mesh, controllerL?: Mesh, paddle?: Mesh, scoreMesh?: Mesh, paddleLight?: PointLight) {
+    constructor(player: PlayerData, headObj?: AFRAME.Entity, controllerR?: AFRAME.Entity, controllerL?: AFRAME.Entity, paddle?: AFRAME.Entity, scoreMesh?: AFRAME.Entity, paddleLight?: AFRAME.Entity) {
         this.id = player.id;
         this.color = player.color;
         this.playerNumber = player.playerNumber;
@@ -495,16 +317,16 @@ class Player implements PlayerData {
 
     updateObj() {
         if (this.headObj) {
-            this.headObj.position = new Vector3(this.position.x, this.position.y, this.position.z);
-            this.headObj.rotation = new Vector3(this.rotation.x, this.rotation.y, this.rotation.z);
+            this.headObj.object3D.position.set(this.position.x, this.position.y, this.position.z);
+            this.headObj.object3D.rotation.set(this.rotation.x, this.rotation.y, this.rotation.z);
         }
         if (this.controllerR) {
-            this.controllerR.position = new Vector3(this.contrPosR.x, this.contrPosR.y, this.contrPosR.z);
-            this.controllerR.rotation = new Vector3(this.contrRotR.x, this.contrRotR.y, this.contrRotR.z);
+            this.controllerR.object3D.position.set(this.contrPosR.x, this.contrPosR.y, this.contrPosR.z);
+            this.controllerR.object3D.rotation.set(this.contrRotR.x, this.contrRotR.y, this.contrRotR.z);
         }
         if (this.controllerL) {
-            this.controllerL.position = new Vector3(this.contrPosL.x, this.contrPosL.y, this.contrPosL.z);
-            this.controllerL.rotation = new Vector3(this.contrRotL.x, this.contrRotL.y, this.contrRotL.z);
+            this.controllerL.object3D.position.set(this.contrPosL.x, this.contrPosL.y, this.contrPosL.z);
+            this.controllerL.object3D.rotation.set(this.contrRotL.x, this.contrRotL.y, this.contrRotL.z);
         }
         // clamp the paddle position to the play area
         if (this.paddle) {
@@ -524,12 +346,12 @@ class Player implements PlayerData {
                 } else {
                     paddleZ = this.contrPosR.z;
                 }
-                this.paddle.position = new Vector3(sceneStartInfos.playCubeSize.x / 2, paddleY, paddleZ);
+                this.paddle.object3D.position.set(sceneStartInfos.playCubeSize.x / 2, paddleY, paddleZ);
                 if (this.scoreMesh && playerUsingXR) {
-                    this.scoreMesh.position = this.paddle.position;
+                    this.scoreMesh.object3D.position.set(this.paddle.object3D.position.x, this.paddle.object3D.position.y, this.paddle.object3D.position.z);
                 }
                 if (this.paddleLight) {
-                    this.paddleLight.position = this.paddle.position;
+                    this.paddleLight.object3D.position.set(this.paddle.object3D.position.x, this.paddle.object3D.position.y, this.paddle.object3D.position.z);
                 }
             } else if (this.playerNumber == 2) {
                 let paddleY, paddleZ;
@@ -547,12 +369,12 @@ class Player implements PlayerData {
                 } else {
                     paddleZ = this.contrPosR.z;
                 }
-                this.paddle.position = new Vector3(-sceneStartInfos.playCubeSize.x / 2, paddleY, paddleZ);
+                this.paddle.object3D.position.set(-sceneStartInfos.playCubeSize.x / 2, paddleY, paddleZ);
                 if (this.scoreMesh && playerUsingXR) {
-                    this.scoreMesh.position = this.paddle.position;
+                    this.scoreMesh.object3D.position.set(this.paddle.object3D.position.x, this.paddle.object3D.position.y, this.paddle.object3D.position.z);
                 }
                 if (this.paddleLight) {
-                    this.paddleLight.position = this.paddle.position;
+                    this.paddleLight.object3D.position.set(this.paddle.object3D.position.x, this.paddle.object3D.position.y, this.paddle.object3D.position.z);
                 }
             } else if (this.playerNumber == 3) {
                 let paddleY, paddleX;
@@ -570,12 +392,12 @@ class Player implements PlayerData {
                 } else {
                     paddleX = this.contrPosR.x;
                 }
-                this.paddle.position = new Vector3(paddleX, paddleY, sceneStartInfos.playCubeSize.z / 2);
+                this.paddle.object3D.position.set(paddleX, paddleY, sceneStartInfos.playCubeSize.z / 2);
                 if (this.scoreMesh && playerUsingXR) {
-                    this.scoreMesh.position = this.paddle.position;
+                    this.scoreMesh.object3D.position.set(this.paddle.object3D.position.x, this.paddle.object3D.position.y, this.paddle.object3D.position.z);
                 }
                 if (this.paddleLight) {
-                    this.paddleLight.position = this.paddle.position;
+                    this.paddleLight.object3D.position.set(this.paddle.object3D.position.x, this.paddle.object3D.position.y, this.paddle.object3D.position.z);
                 }
             } else if (this.playerNumber == 4) {
                 let paddleY, paddleX;
@@ -593,48 +415,48 @@ class Player implements PlayerData {
                 } else {
                     paddleX = this.contrPosR.x;
                 }
-                this.paddle.position = new Vector3(paddleX, paddleY, -sceneStartInfos.playCubeSize.z / 2);
+                this.paddle.object3D.position.set(paddleX, paddleY, -sceneStartInfos.playCubeSize.z / 2);
                 if (this.scoreMesh && playerUsingXR) {
-                    this.scoreMesh.position = this.paddle.position;
+                    this.scoreMesh.object3D.position.set(this.paddle.object3D.position.x, this.paddle.object3D.position.y, this.paddle.object3D.position.z);
                 }
                 if (this.paddleLight) {
-                    this.paddleLight.position = this.paddle.position;
+                    this.paddleLight.object3D.position.set(this.paddle.object3D.position.x, this.paddle.object3D.position.y, this.paddle.object3D.position.z);
                 }
             }
         }
     }
 
-    sendData(xrCamera?: FreeCamera, leftController?: WebXRInputSource, rightController?: WebXRInputSource) {
+    sendData(xrCamera?: AFRAME.Entity, leftController?: AFRAME.Entity, rightController?: AFRAME.Entity) {
         if (xrCamera && leftController && rightController) {
             const headPos = {
-                x: xrCamera?.position.x,
-                y: xrCamera?.position.y,
-                z: xrCamera?.position.z
+                x: xrCamera?.object3D.position.x,
+                y: xrCamera?.object3D.position.y,
+                z: xrCamera?.object3D.position.z
             };
             const headRot = {
-                x: xrCamera?.rotationQuaternion.toEulerAngles().x,
-                y: xrCamera?.rotationQuaternion.toEulerAngles().y,
-                z: xrCamera?.rotationQuaternion.toEulerAngles().z
+                x: xrCamera?.object3D.rotation.x,
+                y: xrCamera?.object3D.rotation.y,
+                z: xrCamera?.object3D.rotation.z
             };
             const contrPosR = {
-                x: rightController?.grip?.position.x,
-                y: rightController?.grip?.position.y,
-                z: rightController?.grip?.position.z
+                x: rightController?.object3D.position.x,
+                y: rightController?.object3D.position.y,
+                z: rightController?.object3D.position.z
             };
             const contrPosL = {
-                x: leftController?.grip?.position.x,
-                y: leftController?.grip?.position.y,
-                z: leftController?.grip?.position.z
+                x: leftController?.object3D.position.x,
+                y: leftController?.object3D.position.y,
+                z: leftController?.object3D.position.z
             };
             const contrRotR = {
-                x: rightController?.grip?.rotationQuaternion?.toEulerAngles().x,
-                y: rightController?.grip?.rotationQuaternion?.toEulerAngles().y,
-                z: rightController?.grip?.rotationQuaternion?.toEulerAngles().z
+                x: rightController?.object3D.rotation.x,
+                y: rightController?.object3D.rotation.y,
+                z: rightController?.object3D.rotation.y
             };
             const contrRotL = {
-                x: leftController?.grip?.rotationQuaternion?.toEulerAngles().x,
-                y: leftController?.grip?.rotationQuaternion?.toEulerAngles().y,
-                z: leftController?.grip?.rotationQuaternion?.toEulerAngles().z
+                x: leftController?.object3D.rotation.x,
+                y: leftController?.object3D.rotation.y,
+                z: leftController?.object3D.rotation.y
             };
 
             socket.emit('clientUpdate', {
@@ -650,37 +472,7 @@ class Player implements PlayerData {
     }
 }
 
-// Watch for browser/canvas resize events
-window.addEventListener('resize', function () {
-    engine.resize();
-});
-
 (async function main() {
-    // Create a WebXR experience
-    xr = await scene.createDefaultXRExperienceAsync({
-        floorMeshes: [scene.getMeshByName('ground') as Mesh],
-        // uiOptions: {
-        //     sessionMode: "immersive-vr",
-        // },
-        inputOptions: {
-            controllerOptions: {
-                // disableMotionControllerAnimation: true,
-                // doNotLoadControllerMesh: true,
-                // forceControllerProfile: <string>,
-                // renderingGroupId: <number>
-            },
-            // customControllersRepositoryURL: <string>,
-            disableControllerAnimation: true,
-            disableOnlineControllerRepository: true,
-            doNotLoadControllerMeshes: true, // move, but hide controllers
-            // forceInputProfile: 'generic-trigger-squeeze-thumbstick',
-        },
-        handSupportOptions: {
-            jointMeshes: {
-                invisible: true,
-            },
-        },
-    });
 
     // Add an event listener to each button
     for (let i = 1; i <= Object.keys(startButtons).length; i++) {
@@ -703,59 +495,45 @@ window.addEventListener('resize', function () {
         });
     }
 
-    xr.teleportation.detach();
-    xr.pointerSelection.detach();
 
-    const hasImmersiveVR = await xr.baseExperience.sessionManager.isSessionSupportedAsync('immersive-ar');
 
-    if (hasImmersiveVR) {
-
-        xr.baseExperience.sessionManager.onXRSessionInit.add(() => {
-
-            xrCamera = xr.baseExperience.camera;
+    if (scene) {
+        scene.addEventListener('enter-vr', () => {
             playerUsingXR = true;
-            scene.activeCamera = xrCamera;
-            // ssr.addCamera(xrCamera);
         });
 
-        xr.baseExperience.sessionManager.onXRSessionEnded.add(() => {
-            engine.resize();
+        scene.addEventListener('exit-vr', () => {
             getLocalStorage();
             playerUsingXR = false;
             console.log('Player is leaving VR');
             socket.emit('playerEndVR');
             startScreen?.style.setProperty('display', 'flex');
-
-            // Reset Camera Position for arc camera
-            // camera.alpha = -(Math.PI / 4) * 3;
-            // camera.beta = Math.PI / 4;
-            // camera.radius = 15;
-            // camera.target = new Vector3(0, 0, 0);
         });
-
-        window.addEventListener('keydown', function (event) {
-            // exit VR Session on ESC
-            if (event.key === 'Escape') {
-                // console.log('Escape Key pressed');
-                if (playerUsingXR) {
-                    xr.baseExperience.exitXRAsync();
-                    // engine.resize();
-                }
-            }
-        });
-
-        setInterval(function () {
-            // console.log('Interval Function');
-            if (clientPlayer) {
-                if (playerUsingXR) {
-                    if (xrCamera && leftController && rightController) {
-                        // console.log('Sending Data to Server while VR');
-                        clientPlayer.sendData(xrCamera, leftController, rightController);
-                    }
-                }
-            }
-        },clientRefreshRate);
     }
+
+    window.addEventListener('keydown', function (event) {
+        // exit VR Session on ESC
+        if (event.key === 'Escape') {
+            // console.log('Escape Key pressed');
+            if (playerUsingXR && scene) {
+                scene?.exitVR();
+                // engine.resize();
+            }
+        }
+    });
+
+    setInterval(function () {
+        // console.log('Interval Function');
+        if (clientPlayer) {
+            if (playerUsingXR) {
+                if (camera && leftControllerMesh && rightControllerMesh) {
+                    // console.log('Sending Data to Server while VR');
+                    clientPlayer.sendData(camera, leftControllerMesh, rightControllerMesh);
+                }
+            }
+        }
+    }, clientRefreshRate);
+
 })();
 
 // !1
@@ -776,7 +554,9 @@ socket.on('ClientID', (id) => {
 socket.on('reload', () => {
     console.log('Server requested reload');
     latencyTestArray.push(`----------Server requested reload----------`);
-    xr.baseExperience.exitXRAsync();
+    if (scene) {
+        scene.exitVR();
+    }
     window.location.reload();
 });
 
@@ -870,14 +650,8 @@ socket.on('currentState', (players: { [key: string]: Player }, ballColor: string
     // set the start button color for the players
     setStartButtonColor(playerStartInfos);
 
-    let ballMaterial = scene.getMaterialByName('ballMaterial') as PBRMaterial;
-    ballMaterial.emissiveColor = Color3.FromHexString(ballColor);
-
-    // let ballParticleSystem = scene.getParticleSystemById('ballParticles');
-    // if (ballParticleSystem) {
-    //     ballParticleSystem.color1 = Color4.FromHexString(ballColor);
-    //     ballParticleSystem.color2 = darkenColor4(Color4.FromHexString(ballColor), 0.5);
-    // }
+    let ball = document.getElementById('ball') as AFRAME.Entity;
+    ball.setAttribute('color', ballColor);
 
     // console.log('Playercount: ', Object.keys(players).length);
 
@@ -907,148 +681,82 @@ socket.on('clientEntersAR', (newSocketPlayer) => {
     // }
 
     // Start VR Session for the client
-    xr.baseExperience.enterXRAsync('immersive-ar', 'local-floor').then(() => {
-        console.log('Enter AR');
+    // if (xr) {
+    //     xr.setReferenceSpaceType('local-floor');
+    // }
 
-        // console log the xr device
+    if (scene) {
+        scene.enterVR();
+    }
 
+    console.log('Enter AR');
 
-        // look for controllers and add event listeners
-        xr.input.onControllerAddedObservable.add((controller) => {
-            controller.onMotionControllerInitObservable.add((motionController) => {
+    // console log the xr device
+    rightController = scene?.renderer.xr.getController(0);
+    leftController = scene?.renderer.xr.getController(1);
 
-                motionController.disableAnimation = true;
-                motionController._doNotLoadControllerMesh = true;
+    rightControllerMesh = document.getElementById('right-controller') as AFRAME.Entity;
+    leftControllerMesh = document.getElementById('left-controller') as AFRAME.Entity;
 
-                // let color: Color3;
-                // let sphere: Mesh;
-                // let material: StandardMaterial;
-
-                if (motionController.handness === 'right') {
-
-                    rightController = controller;
-
-                    const xrIDs = motionController.getComponentIds();
-
-                    let triggerComponent = motionController.getComponent(xrIDs[0]);//xr-standard-trigger
-                    triggerComponent.onButtonStateChangedObservable.add(() => {
-                        if (triggerComponent.pressed) {
-
-                        }
-                    });
-
-                    let squeezeComponent = motionController.getComponent(xrIDs[1]);//xr-standard-squeeze
-                    squeezeComponent.onButtonStateChangedObservable.add(() => {
-                        if (squeezeComponent.pressed) {
-
-                        }
-                    });
-
-                    let thumbstickComponent = motionController.getComponent(xrIDs[2]);//xr-standard-thumbstick
-                    thumbstickComponent.onButtonStateChangedObservable.add(() => {
-                        if (thumbstickComponent.pressed) {
-
-                        }
-                    });
-
-                    let abuttonComponent = motionController.getComponent(xrIDs[3]);//a-button
-                    abuttonComponent.onButtonStateChangedObservable.add(() => {
-                        if (abuttonComponent.pressed) {
-                            // !7
-                            if (!playerList[clientID].isPlaying) {
-                                socket.emit('requestJoinGame', playerList[clientID].inPosition);
-                            }
-                        }
-                    });
-
-                    let bbuttonComponent = motionController.getComponent(xrIDs[4]);//b-button
-                    bbuttonComponent.onButtonStateChangedObservable.add(() => {
-                        if (bbuttonComponent.pressed) {
-                            if (playerList[clientID].isPlaying) {
-                                socket.emit('clientExitsGame', playerList[clientID].playerNumber);
-                            }
-                        }
-                    });
-                }
-
-                if (motionController.handness === 'left') {
-
-                    leftController = controller;
-
-                    const xrIDs = motionController.getComponentIds();
-
-                    let triggerComponent = motionController.getComponent(xrIDs[0]); //xr-standard-trigger
-                    triggerComponent.onButtonStateChangedObservable.add(() => {
-                        if (triggerComponent.pressed) {
-
-                        }
-                    });
-
-                    let squeezeComponent = motionController.getComponent(xrIDs[1]);//xr-standard-squeeze
-                    squeezeComponent.onButtonStateChangedObservable.add(() => {
-                        if (squeezeComponent.pressed) {
-
-                        }
-                    });
-
-                    let thumbstickComponent = motionController.getComponent(xrIDs[2]);//xr-standard-thumbstick
-                    thumbstickComponent.onButtonStateChangedObservable.add(() => {
-                        if (thumbstickComponent.pressed) {
-                            socket.emit('collectingTests', 'all');
-                        }
-                    });
-
-                    let xbuttonComponent = motionController.getComponent(xrIDs[3]);//x-button
-                    xbuttonComponent.onButtonStateChangedObservable.add(() => {
-                        if (xbuttonComponent.pressed) {
-                            // for testing to report a lag
-                            console.log('Send Lag report');
-                            socket.emit('reportLag', serverUpdateCounter);
-                            latencyTestArray.push(`----------Report a Lag at or before Counter: ${serverUpdateCounter}----------`);
-                        }
-                    });
-
-                    let ybuttonComponent = motionController.getComponent(xrIDs[4]);//y-button
-                    ybuttonComponent.onButtonStateChangedObservable.add(() => {
-                        if (ybuttonComponent.pressed) {
-                            // for testing to report a lag
-                            console.log('Send Lag report');
-                            socket.emit('reportLag', serverUpdateCounter);
-                            latencyTestArray.push(`----------Report a Lag at or before Counter: ${serverUpdateCounter}----------`);
-                        }
-                    });
-                }
-            })
+    if (rightControllerMesh) {
+        rightControllerMesh.addEventListener('abuttondown', (event) => {
+            // !7
+            if (!playerList[clientID].isPlaying) {
+                socket.emit('requestJoinGame', playerList[clientID].inPosition);
+            }
         });
 
-        // get the Connection ID of the Player
-        clientID = newSocketPlayer.id;
+        rightControllerMesh.addEventListener('bbuttondown', (event) => {
+            if (playerList[clientID].isPlaying) {
+                socket.emit('clientExitsGame', playerList[clientID].playerNumber);
+            }
+        });
+    }
 
-        // get the player of this socket
-        clientPlayer = new Player(newSocketPlayer);
+    if (leftControllerMesh) {
+        leftControllerMesh.addEventListener('thumbstickdown', (event) => {
+            socket.emit('collectingTests', 'all');
+        });
 
-        // remove the previous player from the local storage
-        localStorage.removeItem('clientID');
 
-        // add this socket player to the playerList
-        playerList[clientID] = clientPlayer;
+        leftControllerMesh.addEventListener('xbuttondown', (event) => {
+            // for testing to report a lag
+            console.log('Send Lag report');
+            socket.emit('reportLag', serverUpdateCounter);
+            latencyTestArray.push(`----------Report a Lag at or before Counter: ${serverUpdateCounter}----------`);
+        });
 
-        // Spawn yourself Entity
-        addPlayer(playerList[clientID], true);
+        leftControllerMesh.addEventListener('ybuttondown', (event) => {
+            // for testing to report a lag
+            console.log('Send Lag report');
+            socket.emit('reportLag', serverUpdateCounter);
+            latencyTestArray.push(`----------Report a Lag at or before Counter: ${serverUpdateCounter}----------`);
+        });
+    }
 
-        // set the xrCamera position and rotation to the player position and rotation from the server
-        if (xrCamera) {
-            xrCamera.position = new Vector3(playerList[clientID].position.x, playerList[clientID].position.y, playerList[clientID].position.z);
-            xrCamera.rotationQuaternion = Quaternion.FromEulerAngles(playerList[clientID].rotation.x, playerList[clientID].rotation.y, playerList[clientID].rotation.z);
-        }
+    // get the Connection ID of the Player
+    clientID = newSocketPlayer.id;
 
-        let playerWall = scene.getMeshByName(`player${playerList[clientID].playerNumber}Wall`) as Mesh;
-        if (playerWall) {
-            playerWall.isVisible = false;
-        }
-    }).catch((err) => {
-        console.error('Failed to enter VR', err);
-    });
+    // get the player of this socket
+    clientPlayer = new Player(newSocketPlayer);
+
+    // remove the previous player from the local storage
+    localStorage.removeItem('clientID');
+
+    // add this socket player to the playerList
+    playerList[clientID] = clientPlayer;
+
+    // Spawn yourself Entity
+    addPlayer(playerList[clientID], true);
+
+    // set the xrCamera position and rotation to the player position and rotation from the server
+    if (camera) {
+        camera.object3D.position.set(playerList[clientID].position.x, playerList[clientID].position.y, playerList[clientID].position.z);
+        camera.object3D.rotation.set(playerList[clientID].rotation.x, playerList[clientID].rotation.y, playerList[clientID].rotation.z);
+    }
+
+    let playerWall = document.getElementById(`player${playerList[clientID].playerNumber}Wall`) as AFRAME.Entity;
+    playerWall.object3D.visible = false;
 });
 
 // when the current player is already on the server and a new player joins
@@ -1091,9 +799,9 @@ socket.on('playerStartPlaying', (newPlayerId, startPlayingNumber) => {
         addPlayerGameUtils(playerList[newPlayerId], false);
     }
 
-    let playerWall = scene.getMeshByName(`player${playerList[newPlayerId].playerNumber}Wall`) as Mesh;
+    let playerWall = document.getElementById(`player${playerList[newPlayerId].playerNumber}Wall`) as AFRAME.Entity;
     if (playerWall) {
-        playerWall.isVisible = false;
+        playerWall.object3D.visible = false;
     }
     // let playerScore = scene.getMeshByName(`player${playerList[newPlayer.id].playerNumber}ScoreMesh`) as Mesh;
     // if (playerScore) {
@@ -1109,9 +817,9 @@ socket.on('playerStartPlaying', (newPlayerId, startPlayingNumber) => {
         }
     }
 
-    guiRectElements['areaEnteredRect'].isVisible = false;
-    guiTextElements['areaEnteredText'].text = ``;
-    guiTextElements['areaEnteredText'].color = "white";
+    //guiRectElements['areaEnteredRect'].isVisible = false;
+    //guiTextElements['areaEnteredText'].text = ``;
+    //guiTextElements['areaEnteredText'].color = "white";
 });
 
 // update the players position and rotation from the server
@@ -1154,17 +862,15 @@ socket.on('inPosChange', (playerId, newInPos) => {
 });
 
 function changePlayerColor(playerId: string) {
-    (playerList[playerId].headObj as Mesh).material = scene.getMaterialByName(`player${playerList[playerId].playerNumber}_mat`) as PBRMaterial;
-    (playerList[playerId].controllerL as Mesh).material = scene.getMaterialByName(`player${playerList[playerId].playerNumber}_mat`) as PBRMaterial;
-    (playerList[playerId].controllerR as Mesh).material = scene.getMaterialByName(`player${playerList[playerId].playerNumber}_mat`) as PBRMaterial;
+    (playerList[playerId].headObj as AFRAME.Entity).setAttribute('color', playerStartInfos[playerList[playerId].playerNumber].color);
+    (playerList[playerId].paddle as AFRAME.Entity).setAttribute('color', playerStartInfos[playerList[playerId].playerNumber].color);
+    (playerList[playerId].controllerL as AFRAME.Entity).setAttribute('color', playerStartInfos[playerList[playerId].playerNumber].color);
+    (playerList[playerId].controllerR as AFRAME.Entity).setAttribute('color', playerStartInfos[playerList[playerId].playerNumber].color);
 }
 
 function updateBall(ballPosition: { x: number, y: number, z: number }) {
-    let ballSphere = scene.getMeshByName('ballSphere') as Mesh;
-    ballSphere.position = new Vector3(ballPosition.x, ballPosition.y, ballPosition.z);
-
-    let ballLight = scene.getLightByName('ballLight') as PointLight;
-    ballLight.position = new Vector3(ballPosition.x, ballPosition.y, ballPosition.z);
+    let ballSphere = document.getElementById('ball') as AFRAME.Entity;
+    ballSphere.object3D.position.set(ballPosition.x, ballPosition.y, ballPosition.z);
 }
 
 // update the score gui element for the specific player
@@ -1172,9 +878,9 @@ function updatePlayerScore(scoredPlayerID: string, newScore: number) {
     // if (guiTextElements[`score${playerList[scoredPlayerID].playerNumber}Label`]) {
     //     guiTextElements[`score${playerList[scoredPlayerID].playerNumber}Label`].text = newScore.toString();
     // }
-    if (guiTextElements[`player${playerList[scoredPlayerID].playerNumber}_scoreLabel`]) {
-        guiTextElements[`player${playerList[scoredPlayerID].playerNumber}_scoreLabel`].text = newScore.toString();
-    }
+    // if (guiTextElements[`player${playerList[scoredPlayerID].playerNumber}_scoreLabel`]) {
+    //     guiTextElements[`player${playerList[scoredPlayerID].playerNumber}_scoreLabel`].text = newScore.toString();
+    // }
 }
 
 // when the scene is first loaded this will set the color of the start buttons
@@ -1200,11 +906,11 @@ function setStartButtonColor(startPositions: { [key: number]: PlayerStartInfo })
 // set the availability of the start buttons, the visibility of the player walls and the visibility of the player scores
 function setPlayerAvailability(startPositions: { [key: number]: PlayerStartInfo }) {
     for (let i = 1; i <= Object.keys(startButtons).length; i++) {
-        let playerWall = scene.getMeshByName(`player${i}Wall`) as Mesh;
+        let playerWall = document.getElementById(`player${i}Wall`) as AFRAME.Entity;
         // let playerScoreMesh = scene.getMeshByName(`player${i}ScoreMesh`) as Mesh;
         if (startPositions[i].used == true) {
             if (playerWall) {
-                playerWall.isVisible = false;
+                playerWall.object3D.visible = false;
             }
             // if (playerScoreMesh) {
             //     playerScoreMesh.isVisible = true;
@@ -1221,7 +927,7 @@ function setPlayerAvailability(startPositions: { [key: number]: PlayerStartInfo 
             }
         } else {
             if (playerWall) {
-                playerWall.isVisible = true;
+                playerWall.object3D.visible = true;
             }
             // if (playerScoreMesh) {
             //     playerScoreMesh.isVisible = false;
@@ -1248,33 +954,40 @@ function addPlayer(player: Player, isPlayer: boolean) {
     let controllerScaling = 0.1;
 
     // add the players head
-    player.headObj = MeshBuilder.CreateBox(`player${player.playerNumber}_head`, { size: 1 }, scene);
-    player.headObj.scaling = new Vector3(headScaling, headScaling, headScaling);
-    player.headObj.position = new Vector3(player.position.x, player.position.y, player.position.z);
-    player.headObj.rotation = new Vector3(player.rotation.x, player.rotation.y, player.rotation.z);
-    player.headObj.material = scene.getMaterialByName(`player${player.playerNumber}_mat`) as PBRMaterial;
+    player.headObj = document.createElement('a-box');
+    player.headObj.setAttribute('id', `player${player.playerNumber}_head`);
+    player.headObj.setAttribute('color', playerStartInfos[player.playerNumber].color);
+    player.headObj.object3D.scale.set(headScaling, headScaling, headScaling);
+    player.headObj.object3D.position.set(player.position.x, player.position.y, player.position.z);
+    player.headObj.object3D.rotation.set(player.rotation.x, player.rotation.y, player.rotation.z);
 
     // dont show the players head, if it is the player itself
     if (isPlayer) {
-        player.headObj.isVisible = false;
+        player.headObj.object3D.visible = false;
     }
 
     // add the players right and left controller
-    player.controllerR = MeshBuilder.CreateBox(`player${player.playerNumber}_contrR`, { size: 1 });
-    player.controllerR.scaling = new Vector3(controllerScaling, controllerScaling, controllerScaling);
-    player.controllerR.position = new Vector3(player.contrPosR.x, player.contrPosR.y, player.contrPosR.z);
-    player.controllerR.rotation = new Vector3(player.contrRotR.x, player.contrRotR.y, player.contrRotR.z);
-    player.controllerR.material = player.headObj.material;
+    player.controllerR = document.createElement('a-box');
+    player.controllerR.setAttribute('id', `player${player.playerNumber}_contrR`);
+    player.controllerR.setAttribute('color', playerStartInfos[player.playerNumber].color);
+    player.controllerR.object3D.scale.set(controllerScaling, controllerScaling, controllerScaling);
+    player.controllerR.object3D.position.set(player.contrPosR.x, player.contrPosR.y, player.contrPosR.z);
+    player.controllerR.object3D.rotation.set(player.contrRotR.x, player.contrRotR.y, player.contrRotR.z);
 
-    player.controllerL = MeshBuilder.CreateBox(`player${player.playerNumber}_contrL`, { size: 1 });
-    player.controllerL.scaling = new Vector3(controllerScaling, controllerScaling, controllerScaling);
-    player.controllerL.position = new Vector3(player.contrPosL.x, player.contrPosL.y, player.contrPosL.z);
-    player.controllerL.rotation = new Vector3(player.contrRotL.x, player.contrRotL.y, player.contrRotL.z);
-    player.controllerL.material = player.headObj.material;
+    player.controllerL = document.createElement('a-box');
+    player.controllerL.setAttribute('id', `player${player.playerNumber}_contrL`);
+    player.controllerL.setAttribute('color', playerStartInfos[player.playerNumber].color);
+    player.controllerL.object3D.scale.set(controllerScaling, controllerScaling, controllerScaling);
+    player.controllerL.object3D.position.set(player.contrPosL.x, player.contrPosL.y, player.contrPosL.z);
+    player.controllerL.object3D.rotation.set(player.contrRotL.x, player.contrRotL.y, player.contrRotL.z);
 
     // player.headObj.isVisible = false;
     // player.controllerL.isVisible = false;
     // player.controllerR.isVisible = false;
+
+    scene?.appendChild(player.headObj);
+    scene?.appendChild(player.controllerR);
+    scene?.appendChild(player.controllerL);
 
     playerList[player.id].headObj = player.headObj;
     playerList[player.id].controllerR = player.controllerR;
@@ -1288,62 +1001,78 @@ function addPlayerGameUtils(player: Player, isPlayer: boolean) {
     let paddleThickness = 0.01;
 
     // add the players paddle
-    player.paddle = MeshBuilder.CreateBox(`player${player.playerNumber}_paddle`, { size: 1 });
-    if (player.playerNumber == 1) {
-        player.paddle.scaling = new Vector3(paddleThickness, sceneStartInfos.playerPaddleSize.h, sceneStartInfos.playerPaddleSize.w);
-        player.paddle.position = new Vector3(sceneStartInfos.playCubeSize.x / 2, player.contrPosR.y, player.contrPosR.z);
-    } else if (player.playerNumber == 2) {
-        player.paddle.scaling = new Vector3(paddleThickness, sceneStartInfos.playerPaddleSize.h, sceneStartInfos.playerPaddleSize.w);
-        player.paddle.position = new Vector3(-sceneStartInfos.playCubeSize.x / 2, player.contrPosR.y, player.contrPosR.z);
-    } else if (player.playerNumber == 3) {
-        player.paddle.scaling = new Vector3(sceneStartInfos.playerPaddleSize.w, sceneStartInfos.playerPaddleSize.h, paddleThickness);
-        player.paddle.position = new Vector3(player.contrPosR.x, player.contrPosR.y, sceneStartInfos.playCubeSize.z / 2);
-    } else if (player.playerNumber == 4) {
-        player.paddle.scaling = new Vector3(sceneStartInfos.playerPaddleSize.w, sceneStartInfos.playerPaddleSize.h, paddleThickness);
-        player.paddle.position = new Vector3(player.contrPosR.x, player.contrPosR.y, -sceneStartInfos.playCubeSize.z / 2);
+    player.paddle = document.createElement('a-box');
+    player.paddle.setAttribute('id', `player${player.playerNumber}_paddle`);
+    if (player.paddle) {
+        if (player.playerNumber == 1) {
+            player.paddle.object3D.scale.set(paddleThickness, sceneStartInfos.playerPaddleSize.h, sceneStartInfos.playerPaddleSize.w);
+            player.paddle.object3D.position.set(sceneStartInfos.playCubeSize.x / 2, player.contrPosR.y, player.contrPosR.z);
+        } else if (player.playerNumber == 2) {
+            player.paddle.object3D.scale.set(paddleThickness, sceneStartInfos.playerPaddleSize.h, sceneStartInfos.playerPaddleSize.w);
+            player.paddle.object3D.position.set(-sceneStartInfos.playCubeSize.x / 2, player.contrPosR.y, player.contrPosR.z);
+        } else if (player.playerNumber == 3) {
+            player.paddle.object3D.scale.set(sceneStartInfos.playerPaddleSize.w, sceneStartInfos.playerPaddleSize.h, paddleThickness);
+            player.paddle.object3D.position.set(player.contrPosR.x, player.contrPosR.y, sceneStartInfos.playCubeSize.z / 2);
+        } else if (player.playerNumber == 4) {
+            player.paddle.object3D.scale.set(sceneStartInfos.playerPaddleSize.w, sceneStartInfos.playerPaddleSize.h, paddleThickness);
+            player.paddle.object3D.position.set(player.contrPosR.x, player.contrPosR.y, -sceneStartInfos.playCubeSize.z / 2);
+        }
     }
-    player.paddle.position = new Vector3(player.contrPosR.x, player.contrPosR.y, player.contrPosR.z);
-    player.paddle.material = scene.getMaterialByName(`player${player.playerNumber}_paddle_mat`) as PBRMaterial;
+    player.paddle.object3D.position.set(player.contrPosR.x, player.contrPosR.y, player.contrPosR.z);
+    player.paddle.setAttribute('color', playerStartInfos[player.playerNumber].color);
 
     // add a light to the paddle
-    player.paddleLight = new PointLight(`player${player.playerNumber}_paddelLight`, player.paddle.position, scene);
-    player.paddleLight.diffuse = Color3.FromHexString(playerStartInfos[player.playerNumber].color);
-    player.paddleLight.intensity = 1;
+    player.paddleLight = document.createElement('a-light');
+    player.paddleLight.setAttribute('id', `player${player.playerNumber}_paddleLight`);
+    player.paddleLight.setAttribute('type', 'point');
+    player.paddleLight.setAttribute('color', playerStartInfos[player.playerNumber].color);
+    player.paddleLight.setAttribute('intensity', '1');
+    player.paddleLight.setAttribute('distance', '2');
+    player.paddleLight.object3D.position.set(player.paddle.object3D.position.x, player.paddle.object3D.position.y, player.paddle.object3D.position.z);
 
     // add the score Mesh to the player
-    player.scoreMesh = MeshBuilder.CreatePlane(`player${player.playerNumber}_scoreMesh`, { size: 1 }, scene);
-    if (playerUsingXR) {
-        player.scoreMesh.position = new Vector3(player.contrPosR.x, player.contrPosR.y, player.contrPosR.z);
-    } else {
-        if (player.playerNumber == 1) {
-            player.scoreMesh.position = new Vector3(sceneStartInfos.playCubeSize.x / 2, sceneStartInfos.midPointOfPlayCube, 0);
-        } else if (player.playerNumber == 2) {
-            player.scoreMesh.position = new Vector3(-(sceneStartInfos.playCubeSize.x / 2), sceneStartInfos.midPointOfPlayCube, 0);
-        } else if (player.playerNumber == 3) {
-            player.scoreMesh.position = new Vector3(0, sceneStartInfos.midPointOfPlayCube, (sceneStartInfos.playCubeSize.z / 2));
-        } else if (player.playerNumber == 4) {
-            player.scoreMesh.position = new Vector3(0, sceneStartInfos.midPointOfPlayCube, -(sceneStartInfos.playCubeSize.z / 2));
+    player.scoreMesh = document.createElement('a-plane');
+    player.scoreMesh.setAttribute('id', `player${player.playerNumber}_scoreMesh`);
+    player.scoreMesh.setAttribute('color', playerStartInfos[player.playerNumber].color);
+
+    if (player.scoreMesh) {
+        if (playerUsingXR) {
+            player.scoreMesh.object3D.position.set(player.contrPosR.x, player.contrPosR.y, player.contrPosR.z);
+        } else {
+            if (player.playerNumber == 1) {
+                player.scoreMesh.object3D.position.set(sceneStartInfos.playCubeSize.x / 2, sceneStartInfos.midPointOfPlayCube, 0);
+            } else if (player.playerNumber == 2) {
+                player.scoreMesh.object3D.position.set(-(sceneStartInfos.playCubeSize.x / 2), sceneStartInfos.midPointOfPlayCube, 0);
+            } else if (player.playerNumber == 3) {
+                player.scoreMesh.object3D.position.set(0, sceneStartInfos.midPointOfPlayCube, (sceneStartInfos.playCubeSize.z / 2));
+            } else if (player.playerNumber == 4) {
+                player.scoreMesh.object3D.position.set(0, sceneStartInfos.midPointOfPlayCube, -(sceneStartInfos.playCubeSize.z / 2));
+            }
         }
     }
     if (!isPlayer) {
-        player.scoreMesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
+        // billboard mode in aframe suchen
     } else {
-        player.scoreMesh.rotation = new Vector3(playerStartInfos[player.playerNumber].rotation.x, playerStartInfos[player.playerNumber].rotation.y, playerStartInfos[player.playerNumber].rotation.z);
+        player.scoreMesh.object3D.rotation.set(playerStartInfos[player.playerNumber].rotation.x, playerStartInfos[player.playerNumber].rotation.y, playerStartInfos[player.playerNumber].rotation.z);
     }
 
-    var playerScoreTex = GUI.AdvancedDynamicTexture.CreateForMesh(player.scoreMesh);
-    // Player Score
-    var scoreRect = new GUI.Rectangle();
-    scoreRect.thickness = 0;
-    playerScoreTex.addControl(scoreRect);
-    var scoreLabel = new GUI.TextBlock();
-    scoreLabel.fontFamily = "loadedFont";
-    scoreLabel.text = "0";
-    scoreLabel.color = playerStartInfos[player.playerNumber].color;
-    scoreLabel.fontSize = 100;
-    scoreRect.addControl(scoreLabel);
-    // add to guiTextElements
-    guiTextElements[`player${player.playerNumber}_scoreLabel`] = scoreLabel;
+    // var playerScoreTex = GUI.AdvancedDynamicTexture.CreateForMesh(player.scoreMesh);
+    // // Player Score
+    // var scoreRect = new GUI.Rectangle();
+    // scoreRect.thickness = 0;
+    // playerScoreTex.addControl(scoreRect);
+    // var scoreLabel = new GUI.TextBlock();
+    // scoreLabel.fontFamily = "loadedFont";
+    // scoreLabel.text = "0";
+    // scoreLabel.color = playerStartInfos[player.playerNumber].color;
+    // scoreLabel.fontSize = 100;
+    // scoreRect.addControl(scoreLabel);
+    // // add to guiTextElements
+    // guiTextElements[`player${player.playerNumber}_scoreLabel`] = scoreLabel;
+
+    scene?.appendChild(player.paddle);
+    scene?.appendChild(player.paddleLight);
+    scene?.appendChild(player.scoreMesh);
 
     playerList[player.id].paddle = player.paddle;
     playerList[player.id].paddleLight = player.paddleLight;
@@ -1356,22 +1085,23 @@ socket.on('ballBounce', (whichPlayer: number, isPaddle: boolean) => {
     Object.keys(playerList).forEach((id) => {
         if (playerList[id].playerNumber == whichPlayer) {
             if (isPaddle) {
-
-                (playerList[id].paddle?.material as PBRMaterial).emissiveColor = Color3.White();
-                //(playerList[id].paddle?.material as StandardMaterial).emissiveColor = darkenColor3(Color3.FromHexString(playerList[id].color), 1.5);
-                setTimeout(function () {
-                    (playerList[id].paddle?.material as PBRMaterial).emissiveColor = Color3.FromHexString(playerStartInfos[whichPlayer].color);
-                }, 150);
+                if (playerList[id].paddle) {
+                    playerList[id].paddle.setAttribute('color', 'white');
+                    //(playerList[id].paddle?.material as StandardMaterial).emissiveColor = darkenColor3(Color3.FromHexString(playerList[id].color), 1.5);
+                    setTimeout(function () {
+                        playerList[id].paddle?.setAttribute('color', playerStartInfos[whichPlayer].color);
+                    }, 150);
+                }
             }
         }
     });
 
-    (scene.getMeshByName(`player${whichPlayer}Wall`) as Mesh).material;
+    // let playerWall = document.getElementById(`player${whichPlayer}Wall`) as AFRAME.Entity;
 
     if (!isPaddle) {
-        (scene.getMeshByName(`player${whichPlayer}Wall`) as Mesh).material = scene.getMaterialByName('wallBounceMat') as StandardMaterial;
+        // hier ball bounce änder farbe
         setTimeout(function () {
-            (scene.getMeshByName(`player${whichPlayer}Wall`) as Mesh).material = scene.getMaterialByName('playerWallMat') as StandardMaterial;
+            // hier ballbounce zurück farbe
         }, 150);
     }
 });
@@ -1382,9 +1112,9 @@ socket.on('playerExitGame', (playerId) => {
         console.log(`Player ${exitPlayer.playerNumber} left the game.`);
         latencyTestArray.push(`----------Player ${exitPlayer.playerNumber} left the game.----------`);
 
-        let playerWall = scene.getMeshByName(`player${exitPlayer.playerNumber}Wall`) as Mesh;
+        let playerWall = document.getElementById(`player${exitPlayer.playerNumber}Wall`) as AFRAME.Entity;
         if (playerWall) {
-            playerWall.isVisible = true;
+            playerWall.object3D.visible = true;
         }
         // let playerScore = scene.getMeshByName(`player${exitPlayer.playerNumber}ScoreMesh`) as Mesh;
         // if (playerScore) {
@@ -1393,9 +1123,9 @@ socket.on('playerExitGame', (playerId) => {
 
         playerList[playerId].isPlaying = false;
 
-        exitPlayer.paddle?.dispose();
-        exitPlayer.paddleLight?.dispose();
-        exitPlayer.scoreMesh?.dispose();
+        exitPlayer.paddle?.parentNode?.removeChild(exitPlayer.paddle);
+        exitPlayer.paddleLight?.parentNode?.removeChild(exitPlayer.paddleLight);
+        exitPlayer.scoreMesh?.parentNode?.removeChild(exitPlayer.scoreMesh);
 
         // set the availability of the start buttons according to the used startpositions on the server
         if (!playerList[playerId].isPlaying) {
@@ -1406,9 +1136,9 @@ socket.on('playerExitGame', (playerId) => {
         playerList[playerId].playerNumber = 0;
         changePlayerColor(playerId);
 
-        guiRectElements['areaExitRect'].isVisible = false;
-        guiTextElements['areaExitText'].text = ``;
-        guiTextElements['areaExitText'].color = "white";
+        //guiRectElements['areaExitRect'].isVisible = false;
+        //guiTextElements['areaExitText'].text = ``;
+        //guiTextElements['areaExitText'].color = "white";
     }
 });
 
@@ -1417,30 +1147,30 @@ socket.on('playerDisconnected', (id) => {
     if (disconnectedPlayer) {
         console.log('Player disconnected: ', id);
         latencyTestArray.push(`----------Player ${disconnectedPlayer.playerNumber} disconnected.----------`);
-        disconnectedPlayer.headObj?.dispose();
-        disconnectedPlayer.controllerR?.dispose();
-        disconnectedPlayer.controllerL?.dispose();
-        disconnectedPlayer.paddle?.dispose();
-        disconnectedPlayer.paddleLight?.dispose();
-        disconnectedPlayer.scoreMesh?.dispose();
+        disconnectedPlayer.headObj?.parentNode?.removeChild(disconnectedPlayer.headObj);
+        disconnectedPlayer.controllerR?.parentNode?.removeChild(disconnectedPlayer.controllerR);
+        disconnectedPlayer.controllerL?.parentNode?.removeChild(disconnectedPlayer.controllerL);
+        disconnectedPlayer.paddle?.parentNode?.removeChild(disconnectedPlayer.paddle);
+        disconnectedPlayer.paddleLight?.parentNode?.removeChild(disconnectedPlayer.paddleLight);
+        disconnectedPlayer.scoreMesh?.parentNode?.removeChild(disconnectedPlayer.scoreMesh);
 
-        let playerWall = scene.getMeshByName(`player${disconnectedPlayer.playerNumber}Wall`) as Mesh;
+        let playerWall = document.getElementById(`player${disconnectedPlayer.playerNumber}Wall`) as AFRAME.Entity;
         if (playerWall) {
-            playerWall.isVisible = true;
+            playerWall.object3D.visible = true;
         }
-        let playerScore = scene.getMeshByName(`player${disconnectedPlayer.playerNumber}ScoreMesh`) as Mesh;
+        let playerScore = document.getElementById(`player${disconnectedPlayer.playerNumber}_scoreMesh`) as AFRAME.Entity;
         if (playerScore) {
-            playerScore.isVisible = false;
+            playerScore.object3D.visible = false;
 
             // player score back to normal position
             if (disconnectedPlayer.playerNumber == 1) {
-                playerScore.position = new Vector3((sceneStartInfos.playCubeSize.x / 2), sceneStartInfos.playCubeSize.x / 2, 0);
+                playerScore.object3D.position.set((sceneStartInfos.playCubeSize.x / 2), sceneStartInfos.playCubeSize.x / 2, 0);
             } else if (disconnectedPlayer.playerNumber == 2) {
-                playerScore.position = new Vector3(-(sceneStartInfos.playCubeSize.x / 2), sceneStartInfos.playCubeSize.x / 2, 0);
+                playerScore.object3D.position.set(-(sceneStartInfos.playCubeSize.x / 2), sceneStartInfos.playCubeSize.x / 2, 0);
             } else if (disconnectedPlayer.playerNumber == 3) {
-                playerScore.position = new Vector3(0, sceneStartInfos.playCubeSize.x / 2, (sceneStartInfos.playCubeSize.z / 2));
+                playerScore.object3D.position.set(0, sceneStartInfos.playCubeSize.x / 2, (sceneStartInfos.playCubeSize.z / 2));
             } else if (disconnectedPlayer.playerNumber == 4) {
-                playerScore.position = new Vector3(0, sceneStartInfos.playCubeSize.x / 2, -(sceneStartInfos.playCubeSize.z / 2));
+                playerScore.object3D.position.set(0, sceneStartInfos.playCubeSize.x / 2, -(sceneStartInfos.playCubeSize.z / 2));
             }
         }
 
@@ -1461,10 +1191,8 @@ socket.on('playerDisconnected', (id) => {
         delete playerList[id];
 
         if (id == clientID) {
-            let defaultCamera = scene.getCameraByName('Camera') as FreeCamera;
-            scene.activeCamera = defaultCamera;
-            defaultCamera.position = new Vector3(0, 5, 0);
-            defaultCamera.rotation = new Vector3(Math.PI / 2, Math.PI, Math.PI / 4);
+            camera.object3D.position.set(0, 5, 0);
+            camera.object3D.rotation.set(Math.PI / 2, Math.PI, Math.PI / 4);
         }
     }
 });
@@ -1472,14 +1200,14 @@ socket.on('playerDisconnected', (id) => {
 // when the playing player Exits the game area
 socket.on('exitGameArea', (areaExitTimerTime) => {
     console.log('Player exit the Game Area. Timer: ', areaExitTimerTime);
-    guiRectElements['areaExitRect'].isVisible = true;
-    guiRectElements['areaExitRect'].color = playerStartInfos[playerList[clientID].playerNumber].color;
-    guiTextElements['areaExitText'].text = `You exit the Game Area of Position ${playerList[clientID].playerNumber}.\nExit the Game in: \n${areaExitTimerTime / 1000}s\nor reenter the Game Area.`;
-    guiTextElements['areaExitText'].color = playerStartInfos[playerList[clientID].playerNumber].color;
+    //guiRectElements['areaExitRect'].isVisible = true;
+    //guiRectElements['areaExitRect'].color = playerStartInfos[playerList[clientID].playerNumber].color;
+    //guiTextElements['areaExitText'].text = `You exit the Game Area of Position ${playerList[clientID].playerNumber}.\nExit the Game in: \n${areaExitTimerTime / 1000}s\nor reenter the Game Area.`;
+    //guiTextElements['areaExitText'].color = playerStartInfos[playerList[clientID].playerNumber].color;
     let timer = areaExitTimerTime / 1000;
     exitGameAreaInterval = setInterval(() => {
         timer -= 1;
-        guiTextElements['areaExitText'].text = `You exit the Game Area of Position ${playerList[clientID].playerNumber}.\nExit the Game in: \n${timer}s\nor reenter the Game Area.`;
+        //guiTextElements['areaExitText'].text = `You exit the Game Area of Position ${playerList[clientID].playerNumber}.\nExit the Game in: \n${timer}s\nor reenter the Game Area.`;
         if (timer <= 0) {
             clearInterval(exitGameAreaInterval as NodeJS.Timeout);
             timer = areaExitTimerTime / 1000;
@@ -1490,23 +1218,23 @@ socket.on('exitGameArea', (areaExitTimerTime) => {
 // when the playing player reenters the game area
 socket.on('reenteredGameArea', () => {
     console.log('Player reentered the Game Area.');
-    guiRectElements['areaExitRect'].isVisible = false;
-    guiTextElements['areaExitText'].text = ``;
-    guiTextElements['areaExitText'].color = "white";
+    //guiRectElements['areaExitRect'].isVisible = false;
+    //guiTextElements['areaExitText'].text = ``;
+    //guiTextElements['areaExitText'].color = "white";
     clearInterval(exitGameAreaInterval as NodeJS.Timeout);
 });
 
 // when the player enters a game area to join the game
 socket.on('enteredGameArea', (areaEnteredTimerTime) => {
     console.log('Player reentered the Game Area. Timer: ', areaEnteredTimerTime);
-    guiRectElements['areaEnteredRect'].isVisible = true;
-    guiRectElements['areaEnteredRect'].color = playerStartInfos[playerList[clientID].inPosition].color;
-    guiTextElements['areaEnteredText'].text = `You entered the Game Area of Position ${playerList[clientID].inPosition}.\nJoin the Game in: \n${areaEnteredTimerTime / 1000}s\nor leave the Game Area.`;
-    guiTextElements['areaEnteredText'].color = playerStartInfos[playerList[clientID].inPosition].color;
+    //guiRectElements['areaEnteredRect'].isVisible = true;
+    //guiRectElements['areaEnteredRect'].color = playerStartInfos[playerList[clientID].inPosition].color;
+    //guiTextElements['areaEnteredText'].text = `You entered the Game Area of Position ${playerList[clientID].inPosition}.\nJoin the Game in: \n${areaEnteredTimerTime / 1000}s\nor leave the Game Area.`;
+    //guiTextElements['areaEnteredText'].color = playerStartInfos[playerList[clientID].inPosition].color;
     let timer = areaEnteredTimerTime / 1000;
     enteredGameAreaInterval = setInterval(() => {
         timer -= 1;
-        guiTextElements['areaEnteredText'].text = `You entered the Game Area of Position ${playerList[clientID].inPosition}.\nJoin the Game in: \n${timer}s\nor leave the Game Area.`;
+        //guiTextElements['areaEnteredText'].text = `You entered the Game Area of Position ${playerList[clientID].inPosition}.\nJoin the Game in: \n${timer}s\nor leave the Game Area.`;
         if (timer <= 0) {
             clearInterval(enteredGameAreaInterval as NodeJS.Timeout);
             timer = areaEnteredTimerTime / 1000;
@@ -1517,51 +1245,54 @@ socket.on('enteredGameArea', (areaEnteredTimerTime) => {
 // when the player Exits the game area while trying to join the game
 socket.on('exitJoiningGameArea', () => {
     console.log('Player exit the Joining Game Area.');
-    guiRectElements['areaEnteredRect'].isVisible = false;
-    guiTextElements['areaEnteredText'].text = ``;
-    guiTextElements['areaEnteredText'].color = "white";
+    //guiRectElements['areaEnteredRect'].isVisible = false;
+    //guiTextElements['areaEnteredText'].text = ``;
+    //guiTextElements['areaEnteredText'].color = "white";
     clearInterval(enteredGameAreaInterval as NodeJS.Timeout);
 });
 
 ////////////////////////// RENDER LOOP //////////////////////////////
 // Register a render loop to repeatedly render the scene
-engine.runRenderLoop(function () {
-    // if (divFps) {
-    //     divFps.innerHTML = engine.getFps().toFixed() + ' fps';
-    // }
-    Object.keys(playerList).forEach((id) => {
-        if (playerList[id]) {
-            playerList[id].updateObj();
+function animate() {
+    if (scene) {
+
+        Object.keys(playerList).forEach((id) => {
+            if (playerList[id]) {
+                playerList[id].updateObj();
+            }
+        });
+
+        if (serverUpdateCounter > 0) {
+
+            // calculate the time difference between the client recieving the server update and teh client showing the update
+            // this is the time it takes for the client to process the server update and show it on the screen
+            if (oldServerUpdateCounter != serverUpdateCounter) {
+                const renderLoopTime = performance.now();
+                const deltaRenderLoopTime = renderLoopTime - updateCounterArray[serverUpdateCounter];
+                const roundedDRLT = Math.round(deltaRenderLoopTime);
+
+                // console.log('Server Update Counter: ', serverUpdateCounter);
+                // latencyTestArray.push(`Server Update Counter: ${serverUpdateCounter}`);
+                latencyTestArray.push(`SUC: ${serverUpdateCounter}, Delay: ${roundedDRLT}ms`);
+                renderLoopTestArray.push({ suc: serverUpdateCounter, time: roundedDRLT });
+
+            }
+            oldServerUpdateCounter = serverUpdateCounter;
+
+            // calculate the fps
+            fpsNewTime = performance.now();
+            const fps = Math.round(fpsNewTime - fpsOldTime);
+            fpsArray.push({ suc: serverUpdateCounter, time: fps });
+
+            fpsOldTime = fpsNewTime;
         }
-    });
 
-    if (serverUpdateCounter > 0) {
-
-        // calculate the time difference between the client recieving the server update and teh client showing the update
-        // this is the time it takes for the client to process the server update and show it on the screen
-        if (oldServerUpdateCounter != serverUpdateCounter) {
-            const renderLoopTime = performance.now();
-            const deltaRenderLoopTime = renderLoopTime - updateCounterArray[serverUpdateCounter];
-            const roundedDRLT = Math.round(deltaRenderLoopTime);
-
-            // console.log('Server Update Counter: ', serverUpdateCounter);
-            // latencyTestArray.push(`Server Update Counter: ${serverUpdateCounter}`);
-            latencyTestArray.push(`SUC: ${serverUpdateCounter}, Delay: ${roundedDRLT}ms`);
-            renderLoopTestArray.push({ suc: serverUpdateCounter, time: roundedDRLT });
-
-        }
-        oldServerUpdateCounter = serverUpdateCounter;
-
-        // calculate the fps
-        fpsNewTime = performance.now();
-        const fps = Math.round(fpsNewTime - fpsOldTime);
-        fpsArray.push({ suc: serverUpdateCounter, time: fps });
-
-        fpsOldTime = fpsNewTime;
+        scene.renderer.render(sceneThree, scene.camera);
     }
-
-    scene.render();
-});
+}
+if (scene) {
+    scene.renderer.setAnimationLoop(animate);
+}
 
 ////////////////////////// END RENDER LOOP //////////////////////////////
 
@@ -1590,41 +1321,26 @@ function handleMouseOver(playerNumber: number, isPreButton: boolean = false) {
 
         if (playerStartInfo) {
             // change camera position to the player start position while hovering over the button
-            let defaultCamera = scene.getCameraByName('Camera') as FreeCamera;
 
             let cameraHight = sceneStartInfos.playCubeSize.y / 1.5;
 
-            let newRotation = new Vector3(playerStartInfo.rotation.x, playerStartInfo.rotation.y, playerStartInfo.rotation.z);
-            let newPosition = new Vector3(playerStartInfo.position.x, cameraHight, playerStartInfo.position.z);
+            camera.object3D.rotation.set(playerStartInfo.rotation.x, playerStartInfo.rotation.y, playerStartInfo.rotation.z);
+            camera.object3D.position.set(playerStartInfo.position.x, cameraHight, playerStartInfo.position.z);
 
             if (playerNumber == 1) {
-                newPosition = new Vector3(playerStartInfo.position.x + 2, cameraHight, playerStartInfo.position.z);
+                camera.object3D.position.set(playerStartInfo.position.x + 2, cameraHight, playerStartInfo.position.z);
             } else if (playerNumber == 2) {
-                newPosition = new Vector3(playerStartInfo.position.x - 2, cameraHight, playerStartInfo.position.z);
+                camera.object3D.position.set(playerStartInfo.position.x - 2, cameraHight, playerStartInfo.position.z);
             } else if (playerNumber == 3) {
-                newPosition = new Vector3(playerStartInfo.position.x, cameraHight, playerStartInfo.position.z + 2);
+                camera.object3D.position.set(playerStartInfo.position.x, cameraHight, playerStartInfo.position.z + 2);
             } else if (playerNumber == 4) {
-                newPosition = new Vector3(playerStartInfo.position.x, cameraHight, playerStartInfo.position.z - 2);
+                camera.object3D.position.set(playerStartInfo.position.x, cameraHight, playerStartInfo.position.z - 2);
             }
-            let oldPosition = defaultCamera.position.clone();
-            let oldRotation = defaultCamera.rotation.clone();
-
-            // defaultCamera.position = newPosition;
-            // defaultCamera.rotation = newRotation;
-
-            const positionAnimation = createCameraAnimation("position", oldPosition, newPosition, 30);
-            const rotationAnimation = createCameraAnimation("rotation", oldRotation, newRotation, 30);
-
-            defaultCamera.animations = [];
-            defaultCamera.animations.push(positionAnimation);
-            defaultCamera.animations.push(rotationAnimation);
-
-            scene.beginAnimation(defaultCamera, 0, 60, false);
 
             // hide the specific player wall while hovering over the button
-            let playerWall = scene.getMeshByName(`player${playerNumber}Wall`) as Mesh;
+            let playerWall = document.getElementById(`player${playerNumber}Wall`) as AFRAME.Entity;
             if (playerWall) {
-                playerWall.isVisible = false;
+                playerWall.object3D.visible = false;
             }
 
         }
@@ -1655,50 +1371,17 @@ function handleMouseOut(playerNumber: number, isPreButton: boolean = false) {
 
         if (playerStartInfo) {
             // change camera position back to default
-            let defaultCamera = scene.getCameraByName('Camera') as FreeCamera;
+            camera.object3D.position.set(0, 5, 0);
+            camera.object3D.rotation.set(Math.PI / 2, Math.PI, Math.PI / 4);
 
-            let newPosition = new Vector3(0, 5, 0);
-            let newRotation = new Vector3(Math.PI / 2, Math.PI, Math.PI / 4);
-            let oldPosition = defaultCamera.position.clone();
-            let oldRotation = defaultCamera.rotation.clone();
-
-            // defaultCamera.position = newPosition;
-            // defaultCamera.rotation = newRotation;
-
-            const positionAnimation = createCameraAnimation("position", oldPosition, newPosition, 30);
-            const rotationAnimation = createCameraAnimation("rotation", oldRotation, newRotation, 30);
-
-            defaultCamera.animations = [];
-            defaultCamera.animations.push(positionAnimation);
-            defaultCamera.animations.push(rotationAnimation);
-
-            scene.beginAnimation(defaultCamera, 0, 30, false);
 
             // show the specific player wall again
-            let playerWall = scene.getMeshByName(`player${playerNumber}Wall`) as Mesh;
+            let playerWall = document.getElementById(`player${playerNumber}Wall`) as AFRAME.Entity;
             if (playerWall /*&& !playerUsingXR*/) {
-                playerWall.isVisible = true;
+                playerWall.object3D.visible = true;
             }
         }
     }
-}
-
-function createCameraAnimation(property: string, startValue: Vector3, endValue: Vector3, duration: number) {
-    const animation = new Animation(
-        `cameraAnimation_${property}`,
-        property,
-        60,
-        Animation.ANIMATIONTYPE_VECTOR3,
-        Animation.ANIMATIONLOOPMODE_CONSTANT
-    );
-
-    const keys = [
-        { frame: 0, value: startValue },
-        { frame: duration, value: endValue }
-    ];
-
-    animation.setKeys(keys);
-    return animation;
 }
 
 /////////////////////////// END HTML CSS Stuff //////////////////////////////
@@ -1803,16 +1486,6 @@ function getLocalStorage() {
 ///////////////////////////// TESTING GROUND ////////////////////////////
 
 window.addEventListener('keydown', function (event) {
-    // Check if the key combination is Ctrl + I
-    if (event.ctrlKey && event.key === 'i') {
-        if (Inspector.IsVisible) {
-            Inspector.Hide();
-        } else {
-            Inspector.Show(scene, {
-                embedMode: true,
-            });
-        }
-    }
 
     // add an event listener for ending the server und get the test results
     // l: latency, n: network, x: end server without test results

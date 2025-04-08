@@ -8,8 +8,8 @@
     <link rel="stylesheet" href="/src/style.css">
 
     <!-- <script src="/socket.io/socket.io.js"></script> -->
-    <!-- <script src="https://cdn.babylonjs.com/babylon.js"></script> -->
-    <script language="JavaScript" type="module" src="./dist/bundle.js" defer></script>
+     <script language="JavaScript" type="module" src="./node_modules/aframe/dist/aframe-v1.7.1.min.js" defer></script>
+    <!-- <script language="JavaScript" type="module" src="./dist/bundle.js" defer></script> -->
 </head>
 
 <body>
@@ -50,7 +50,32 @@
             </div>
         </div>
     </div>
-    <canvas id="renderCanvas"></canvas>
+    <a-scene>
+        <a-sky color="#ECECEC"></a-sky>
+        <a-sphere id="ball" position="0 1 0" radius="1" color="#EF2D5E">
+            <a-light type="point" color="#FFFFFF" intensity="1" distance="5"></a-light>
+        </a-sphere>
+        <a-box id="player3Ground" position="0 -25 2" scale="2 50 1.5"></a-box>
+        <a-box id="player4Ground" position="0 -25 -2" scale="2 50 1.5"></a-box>
+        <a-box id="player2Ground" position="-2 -25 0" scale="1.5 50 2"></a-box>
+        <a-box id="player1Ground" position="2 -25 0" scale="1.5 50 2"></a-box>
+        <a-plane id="player3Wall" position="0 1 1" scale="2 2 1" rotation="0 0 0"></a-plane>
+        <a-plane id="player4Wall" position="0 1 -1" scale="2 2 1" rotation="0 0 0"></a-plane>
+        <a-plane id="player1Wall" position="1 1 0" scale="2 2 1" rotation="0 90 0"></a-plane>
+        <a-plane id="player2Wall" position="-1 1 0" scale="2 2 1" rotation="0 90 0"></a-plane>
+        <a-plane id="player5Wall" position="0 2 0" scale="2 2 1" rotation="90 0 0"></a-plane>
+        <a-plane id="player6Wall" position="0 0 0" scale="2 2 1" rotation="90 0 0"></a-plane>
+
+        <a-entity id="camera" camera position="0 1.7 0" wasd-controls look-controls></a-entity>
+        <a-entity id="right-controller" tracked-controls="controller: 0"></a-entity>
+        <a-entity id="left-controller" tracked-controls="controller: 1"></a-entity>
+    </a-scene>
+
+    <script>
+        import { io } from 'socket.io-client';
+
+        const socket = io();
+    </script>
 </body>
 
 </html>
